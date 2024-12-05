@@ -1,201 +1,334 @@
+import random
+import duckdb
+import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
-from pandas import read_csv, get_dummies
-from sklearn.model_selection import train_test_split
-from sklearn.tree import DecisionTreeClassifier
-from sklearn.naive_bayes import GaussianNB
-from sklearn.ensemble import AdaBoostClassifier, RandomForestClassifier
-from sklearn.neighbors import KNeighborsClassifier
-from sklearn.linear_model import LogisticRegression, Perceptron
-from sklearn.neural_network import MLPClassifier
-from sklearn.svm import SVC
-import os
-import joblib
+from plotly.subplots import make_subplots
+import plotly.graph_objects as go
 
-# Streamlit app title
-st.title("ML Model Training and Lung Cancer Prediction")
+#######################################
+# PAGE SETUP
+#######################################
 
-# Sidebar navigation
-st.sidebar.title("Navigation")
-section = st.sidebar.radio("Choose Section", ["Train Model", "Make Predictions"])
+st.set_page_config(page_title="Dashboard", page_icon=":bar_chart:", layout="wide")
 
-if section == "Train Model":
-    st.header("Train a Classification Model")
+st.title("Resampling and Performance Metrics Dashboard")
+st.markdown("_Laboratory Exercise #2_")
 
-    # Upload the dataset
-    uploaded_file = st.file_uploader("Upload your CSV file", type=["csv"])
+with st.sidebar:
+    st.header("Upload a CSV File")
+    uploaded_file = st.file_uploader("Choose a file")
 
-    if uploaded_file:
-        # Load the dataset
-        dataframe = read_csv(uploaded_file)
-        st.write("Dataset Preview:")
-        st.write(dataframe.head())
+if uploaded_file is None:
+    st.info(" Upload a file through config", icon="ℹ️")
+    st.stop()
 
-        # Convert columns from Smoking to Chest Pain (2 = 1, 1 = 0)
-        columns_to_convert = ["SMOKING", "YELLOW_FINGERS", "ANXIETY", "PEER_PRESSURE", "CHRONIC_DISEASE", "FATIGUE", "ALLERGY", "WHEEZING", "ALCOHOL_CONSUMING", "COUGHING", "SHORTNESS_OF_BREATH", "SWALLOWING_DIFFICULTY", "CHEST_PAIN"]
-        if all(col in dataframe.columns for col in columns_to_convert):
-            for col in columns_to_convert:
-                dataframe[col] = dataframe[col].replace({2: 1, 1: 0})
-            st.write("Processed Dataset (Converted Smoking to Chest Pain Columns):")
-            st.write(dataframe.head())
-        else:
-            missing_columns = [col for col in columns_to_convert if col not in dataframe.columns]
-            st.warning(f"The following required columns are missing from the dataset: {missing_columns}")
+#######################################
+# DATA LOADING
+#######################################
 
-        # One-Hot Encoding for categorical features
-        dataframe = get_dummies(dataframe, drop_first=True)
-        st.write("Processed Dataset (After Encoding):")
-        st.write(dataframe.head())
 
-        # Select features and target
-        columns = list(dataframe.columns)
-        target_column = st.selectbox("Select the target column", columns)
-        feature_columns = st.multiselect("Select feature columns", [col for col in columns if col != target_column])
+@st.cache_data
+def load_data(path: str):
+    df = pd.read_csv(path)
+    return df
 
-        if target_column and feature_columns:
-            X = dataframe[feature_columns].values
-            Y = dataframe[target_column].values
 
-            # Sidebar for model selection
-            model_choice = st.sidebar.selectbox(
-                "Select Machine Learning Model",
-                ["Decision Tree", "Gaussian Naive Bayes", "AdaBoost", "K-Nearest Neighbors",
-                 "Logistic Regression", "MLP Classifier", "Perceptron Classifier", "Random Forest",
-                 "Support Vector Machine (SVM)"]
+df = load_data(uploaded_file)
+
+# Check if the CSV is lung cancer or air quality
+csv_type = 'lung cancer' if 'LUNG_CANCER' in df.columns else 'air quality'
+
+all_months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
+
+with st.expander("Data Preview"):
+    st.dataframe(df)
+
+#######################################
+# VISUALIZATION METHODS
+#######################################
+
+def plot_metric(label, value, prefix="", suffix="", show_graph=False, color_graph=""):
+    fig = go.Figure()
+
+    fig.add_trace(
+        go.Indicator(
+            value=value,
+            gauge={"axis": {"visible": False}},
+            number={
+                "prefix": prefix,
+                "suffix": suffix,
+                "font.size": 28,
+            },
+            title={
+                "text": label,
+                "font": {"size": 24},
+            },
+        )
+    )
+
+    if show_graph:
+        fig.add_trace(
+            go.Scatter(
+                y=random.sample(range(0, 101), 30),
+                hoverinfo="skip",
+                fill="tozeroy",
+                fillcolor=color_graph,
+                line={"color": color_graph},
             )
+        )
 
-            if model_choice == "Decision Tree":
-                st.subheader("Decision Tree Classifier")
-                max_depth = st.slider("Max Depth", 1, 50, 5)
-                model = DecisionTreeClassifier(max_depth=max_depth, random_state=42)
+    fig.update_xaxes(visible=False, fixedrange=True)
+    fig.update_yaxes(visible=False, fixedrange=True)
+    fig.update_layout(
+        margin=dict(t=30, b=0),
+        showlegend=False,
+        plot_bgcolor="white",
+        height=100,
+    )
 
-            elif model_choice == "Gaussian Naive Bayes":
-                st.subheader("Gaussian Naive Bayes Classifier")
-                var_smoothing = st.number_input("Var Smoothing", 1e-9, 1e-5, 1e-8, format="%.1e")
-                model = GaussianNB(var_smoothing=var_smoothing)
+    st.plotly_chart(fig, use_container_width=True)
 
-            elif model_choice == "AdaBoost":
-                st.subheader("AdaBoost Classifier")
-                n_estimators = st.slider("Number of Estimators", 50, 500, 100)
-                model = AdaBoostClassifier(n_estimators=n_estimators, random_state=42)
 
-            elif model_choice == "K-Nearest Neighbors":
-                st.subheader("K-Nearest Neighbors Classifier")
-                n_neighbors = st.slider("Number of Neighbors", 1, 20, 5)
-                model = KNeighborsClassifier(n_neighbors=n_neighbors)
+def plot_gauge(indicator_number, indicator_color, indicator_suffix, indicator_title, max_bound):
+    """
+    Create and display a gauge chart using Plotly for a metric.
+    """
+    fig = go.Figure(
+        go.Indicator(
+            value=indicator_number,
+            mode="gauge+number",
+            domain={"x": [0, 1], "y": [0, 1]},
+            number={"suffix": indicator_suffix, "font.size": 18},
+            gauge={
+                "axis": {"range": [0, max_bound], "tickwidth": 1},
+                "bar": {"color": indicator_color},
+            },
+            title={"text": indicator_title, "font": {"size": 20}},
+        )
+    )
+    fig.update_layout(
+        height=250,  # Adjusted height for better appearance
+        margin=dict(l=10, r=10, t=30, b=10, pad=5),
+    )
+    st.plotly_chart(fig, use_container_width=True)
 
-            elif model_choice == "Logistic Regression":
-                st.subheader("Logistic Regression Classifier")
-                C = st.slider("Inverse of Regularization Strength (C)", 0.01, 10.0, 1.0)
-                model = LogisticRegression(C=C, max_iter=200, random_state=42)
+def plot_top_right():
+    if csv_type == 'lung cancer':
+        # Prepare data for clustered bar chart
+        gender_lung_cancer_data = df.groupby(['GENDER', 'LUNG_CANCER']).size().reset_index(name='Count')
 
-            elif model_choice == "MLP Classifier":
-                st.subheader("MLP Classifier")
-                hidden_layer_sizes = st.text_input("Hidden Layer Sizes (e.g., 100,50)", "100,50")
-                hidden_layer_sizes = tuple(map(int, hidden_layer_sizes.split(",")))
-                model = MLPClassifier(hidden_layer_sizes=hidden_layer_sizes, max_iter=200, random_state=42)
+        # Define custom colors for 'YES' and 'NO'
+        custom_colors = {
+            "YES": "#ff0e0e",  # Tomato Red for Lung Cancer 'YES'
+            "NO": "#4BB543",   # Steel Blue for Lung Cancer 'NO'
+        }
 
-            elif model_choice == "Perceptron Classifier":
-                st.subheader("Perceptron Classifier")
-                eta0 = st.slider("Learning Rate (eta0)", 0.01, 1.0, 0.1)
-                model = Perceptron(eta0=eta0, random_state=42)
+        # Clustered Bar Graph for Gender and Lung Cancer
+        fig_gender_lung_cancer = px.bar(
+            gender_lung_cancer_data,
+            x='GENDER',
+            y='Count',
+            color='LUNG_CANCER',
+            barmode='group',
+            labels={'GENDER': 'Gender', 'Count': 'Count', 'LUNG_CANCER': 'Lung Cancer'},
+            title="Gender Distribution vs Lung Cancer (Yes/No)",
+            color_discrete_map=custom_colors,  # Apply custom color mapping
+        )
+        st.plotly_chart(fig_gender_lung_cancer, use_container_width=True)
 
-            elif model_choice == "Random Forest":
-                st.subheader("Random Forest Classifier")
-                n_estimators = st.slider("Number of Trees", 10, 200, 100)
-                model = RandomForestClassifier(n_estimators=n_estimators, random_state=42)
+    elif csv_type == 'air quality':
+        # CO Level Distribution Bar Graph
+        co_level_order = ["Very Low", "Low", "Moderate", "High", "Very High"]  # Define the correct order
+        co_level_colors = {
+            "Very Low": "#00FF00",  # Green
+            "Low": "#7FFF00",       # Chartreuse
+            "Moderate": "#FFFF00",  # Yellow
+            "High": "#FFA500",      # Orange
+            "Very High": "#FF0000", # Red
+        }
 
-            elif model_choice == "Support Vector Machine (SVM)":
-                st.subheader("Support Vector Machine (SVM)")
-                kernel = st.selectbox("Kernel", ["linear", "poly", "rbf", "sigmoid"])
-                C = st.slider("Regularization Parameter (C)", 0.1, 10.0, 1.0)
-                model = SVC(kernel=kernel, C=C, random_state=42)
+        # Ensure CO_level is a categorical column with the specified order
+        df['CO_level'] = pd.Categorical(df['CO_level'], categories=co_level_order, ordered=True)
 
-             # Train the model
-            test_size = st.slider("Test Size (fraction)", 0.1, 0.5, 0.2)
-            X_train, X_test, Y_train, Y_test = train_test_split(X, Y, test_size=test_size, random_state=42)
+        # Calculate CO Level counts
+        co_level_count = df['CO_level'].value_counts().reindex(co_level_order)
 
-            if st.button("Train Model"):
-                model.fit(X_train, Y_train)
-                accuracy = model.score(X_test, Y_test)
-                st.write(f"Model Accuracy: {accuracy * 100:.2f}%")
+        # Plot the bar chart with custom colors
+        fig = px.bar(
+            x=co_level_count.index,
+            y=co_level_count.values,
+            labels={'x': 'CO Level', 'y': 'Count'},
+            title="CO Level Distribution",
+            color=co_level_count.index,
+            color_discrete_map=co_level_colors,  # Apply custom color mapping
+        )
 
-                # Save the model
-                save_folder = r'C:\Users\user\Desktop\jeah\ITD105\LAB3\Models'
-                os.makedirs(save_folder, exist_ok=True)
-                save_path = os.path.join(save_folder, f"classification_{model_choice.replace(' ', '_').lower()}_model.joblib")
-                joblib.dump(model, save_path)
-                st.success(f"Model saved as: {save_path}")
+        # Update layout to remove legend and maintain the desired order
+        fig.update_layout(
+            xaxis={'categoryorder': 'array', 'categoryarray': co_level_order},
+            showlegend=False  # Remove the legend
+        )
 
-elif section == "Make Predictions":
-    st.header("Lung Cancer Diagnosis Predictor")
-    uploaded_model = st.file_uploader("Upload a Trained Model (joblib format)", type=["joblib"])
-    if uploaded_model is not None:
-        model = joblib.load(uploaded_model)
-        st.success("Model successfully loaded!")
+        st.plotly_chart(fig, use_container_width=True)
 
-        st.subheader("Input Sample Data for Prediction")
+def plot_bottom_left():
+    if csv_type == 'lung cancer':
+        # Group ages into bins
+        age_bins = pd.cut(df['AGE'], bins=range(0, 101, 10), right=False, labels=[f"{i}-{i+9}" for i in range(0, 100, 10)])
+        df['Age Group'] = age_bins
 
-        # Input Fields for Prediction
-        def convert_yes_no(value):
-            return 1 if value == "Yes" else 0  # Adjusted for the new mapping (Yes=1, No=0)
+        # Calculate lung cancer rate per age group
+        age_group_lung_cancer = (
+            df.groupby('Age Group')['LUNG_CANCER']
+            .apply(lambda x: (x == "YES").mean())  # Calculate percentage of "YES"
+            .reset_index()
+            .rename(columns={'LUNG_CANCER': 'Lung Cancer Rate'})
+        )
 
-        # Input features (15 expected by the model), following the specified order
-        # Row 1: Gender, Age, Smoking
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            gender = st.selectbox("Gender", ["Male", "Female"])
-            gender = 1 if gender == "Male" else 0  # Convert "Male" to 1 and "Female" to 0
-        with col2:
-            age = st.number_input("Age", min_value=0, max_value=120, value=30)
-        with col3:
-            smoking = convert_yes_no(st.selectbox("Smoking", ["Yes", "No"]))
+        # Line graph for Lung Cancer Rate by Age Group
+        fig = px.line(
+            age_group_lung_cancer,
+            x='Age Group',
+            y='Lung Cancer Rate',
+            markers=True,
+            title="Lung Cancer Rate by Age Group",
+            labels={'Lung Cancer Rate': 'Lung Cancer Rate (%)'},
+        )
+        st.plotly_chart(fig, use_container_width=True)
 
-        # Row 2: Anxiety, Alcohol, Chronic Disease, Chest Pain
-        col1, col2, col3, col4 = st.columns(4)
-        with col1:
-            anxiety = convert_yes_no(st.selectbox("Anxiety", ["Yes", "No"]))
-        with col2:
-            alcohol_consumption = convert_yes_no(st.selectbox("Alcohol Consumption", ["Yes", "No"]))
-        with col3:
-            chronic_disease = convert_yes_no(st.selectbox("Chronic Disease", ["Yes", "No"]))
-        with col4:
-            chest_pain = convert_yes_no(st.selectbox("Chest Pain", ["Yes", "No"]))
+    elif csv_type == 'air quality':
+        # Convert Date to datetime
+        df['Date'] = pd.to_datetime(df['Date'])
 
-        # Row 3: Peer Pressure, Allergy, Wheezing, Fatigue
-        col1, col2, col3, col4 = st.columns(4)
-        with col1:
-            peer_pressure = convert_yes_no(st.selectbox("Peer Pressure", ["Yes", "No"]))
-        with col2:
-            allergy = convert_yes_no(st.selectbox("Allergy", ["Yes", "No"]))
-        with col3:
-            wheezing = convert_yes_no(st.selectbox("Wheezing", ["Yes", "No"]))
-        with col4:
-            fatigue = convert_yes_no(st.selectbox("Fatigue", ["Yes", "No"]))
+        # Filter out rows where T equals -200
+        filtered_df = df[df['T'] != -200]
 
-        # Row 4: Coughing, Shortness of Breath, Difficulty Swallowing, Yellow Fingers
-        col1, col2, col3, col4 = st.columns(4)
-        with col1:
-            coughing = convert_yes_no(st.selectbox("Coughing", ["Yes", "No"]))
-        with col2:
-            shortness_of_breath = convert_yes_no(st.selectbox("Shortness of Breath", ["Yes", "No"]))
-        with col3:
-            swallowing_difficulty = convert_yes_no(st.selectbox("Swallowing Difficulty", ["Yes", "No"]))
-        with col4:
-            yellow_fingers = convert_yes_no(st.selectbox("Yellow Fingers", ["Yes", "No"]))
+        # Aggregate data to reduce clutter (daily average of T)
+        daily_avg = filtered_df.groupby('Date')['T'].mean().reset_index()
 
-        # Combine inputs
-        input_data = [
-            gender, age, smoking, anxiety, alcohol_consumption, chronic_disease, chest_pain,
-            peer_pressure, allergy, wheezing, fatigue, coughing, shortness_of_breath,
-            swallowing_difficulty, yellow_fingers
-        ]
+        # Plot the trend of daily average T over time
+        fig = px.line(
+            daily_avg,
+            x="Date",
+            y="T",
+            markers=True,
+            title="Daily Average Temperature Trend Over Time",
+            labels={"T": "Temperature (T)", "Date": "Date"},
+        )
+        # Update line and marker colors to orange
+        fig.update_traces(line_color='orange', marker_color='orange')
 
-        # Predict using the loaded model
-        if st.button("Predict"):
-            prediction = model.predict([input_data])
-            if prediction[0] == 1:
-                result = '<span style="color:green;">Positive for Lung Cancer</span>'
-            else:
-                result = '<span style="color:red;">Negative for Lung Cancer</span>'
-            
-            st.markdown(f"### Prediction: {result}", unsafe_allow_html=True)
+        fig.update_layout(
+            xaxis_title="Date",
+            yaxis_title="Temperature (T)",
+            showlegend=False,
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+def plot_bottom_right():
+    if csv_type == 'lung cancer':
+        # Define custom colors for 'Male' and 'Female'
+        gender_colors = {
+            "M": "#4682B4",  # Blue for Male
+            "F": "#FF69B4",  # Pink for Female
+        }
+
+        # Stacked Bar Chart for Gender, Age, and Lung Cancer
+        fig = px.histogram(
+            df,
+            x="AGE",
+            color="GENDER",
+            barmode="stack",
+            title="Gender and Age Distribution for Lung Cancer",
+            color_discrete_map=gender_colors,  # Apply custom color mapping
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+    elif csv_type == 'air quality':
+        # Stacked Bar Chart for Date, Time and CO Level
+        fig = px.histogram(df, x="Date", color="CO_level", barmode="stack", title="Date and CO Level Distribution")
+        st.plotly_chart(fig, use_container_width=True)
+
+
+#######################################
+# STREAMLIT LAYOUT
+#######################################
+
+# Column Layout
+top_left_column, top_right_column = st.columns((2, 1))
+bottom_left_column, bottom_right_column = st.columns(2)
+
+with top_left_column:
+    column_1, column_2, column_3, column_4 = st.columns(4)
+
+    # Top-left column: Row 1 - Display Counts
+    with column_1:
+        # Data Count
+        plot_metric("Data Count", len(df), show_graph=False)
+
+    with column_2:
+        # Data Columns
+        plot_metric("Column Count", len(df.columns), show_graph=False)
+
+    with column_3:
+        # Missing Data Count
+        missing_data_count = df.isnull().sum().sum()
+        plot_metric("Missing Data", missing_data_count, show_graph=False)
+
+    with column_4:
+        # Missing Data Ratio
+        unique_data = (len(df.drop_duplicates()) / len(df)) * 100
+        plot_metric("Unique Data", unique_data, suffix="%", show_graph=False)
+
+    # Top-left column: Row 2 - Display Gauges
+    with column_1:
+        # Gauge for Data Count
+        plot_gauge(
+            indicator_number=len(df),
+            indicator_color="#4CAF50",
+            indicator_suffix="",
+            indicator_title="Data Count",
+            max_bound=len(df) * 1.2,  # Dynamic bound
+        )
+
+    with column_2:
+        # Gauge for Data Columns
+        plot_gauge(
+            indicator_number=len(df.columns),
+            indicator_color="#2196F3",
+            indicator_suffix="",
+            indicator_title="Data Columns",
+            max_bound=len(df.columns) * 1.5,
+        )
+
+    with column_3:
+        # Gauge for Missing Data Count
+        plot_gauge(
+            indicator_number=missing_data_count,
+            indicator_color="#FF9800",
+            indicator_suffix="",
+            indicator_title="Missing Data",
+            max_bound=(len(df) * len(df.columns)) * 0.2,
+        )
+
+    with column_4:
+        # Gauge for Missing Data Ratio
+        plot_gauge(
+            indicator_number=unique_data,
+            indicator_color="#E91E63",
+            indicator_suffix="%",
+            indicator_title="Data Uniqueness",
+            max_bound=100,  # Ratio is a percentage, so max is 100
+        )
+
+
+with top_right_column:
+    plot_top_right()
+
+with bottom_left_column:
+    plot_bottom_left()
+
+with bottom_right_column:
+    plot_bottom_right()

@@ -14,7 +14,7 @@ import seaborn as sns
 import numpy as np
 
 # Streamlit app title
-st.title("ML Model Comparison")
+st.title("Classification Model Comparison")
 
 # Upload the dataset
 uploaded_file = st.file_uploader("Upload your CSV file", type=["csv"])
@@ -25,10 +25,32 @@ if uploaded_file:
     st.write("Dataset Preview:")
     st.write(dataframe.head())
 
-    # Select features and target
-    columns = list(dataframe.columns)
-    target_column = st.selectbox("Select the target column", columns)
-    feature_columns = st.multiselect("Select feature columns", [col for col in columns if col != target_column])
+    # Preprocessing to handle non-numeric columns
+    numeric_columns = dataframe.select_dtypes(include=["number"]).columns.tolist()
+    non_numeric_columns = dataframe.select_dtypes(exclude=["number"]).columns.tolist()
+
+    if non_numeric_columns:
+        st.warning(f"Non-numeric columns detected: {non_numeric_columns}. They will be encoded or excluded.")
+        for col in non_numeric_columns:
+            if dataframe[col].nunique() < 20:  # Encode categorical columns with fewer unique values
+                dataframe[col] = dataframe[col].astype("category").cat.codes
+            else:
+                dataframe.drop(columns=[col], inplace=True)  # Drop unsuitable columns
+
+        # Ensure target column defaults to 'LUNG_CANCER' and features default to all other columns
+        if "LUNG_CANCER" in dataframe.columns:
+            target_column = st.selectbox(
+                "Select target column (Y):",
+                dataframe.columns,
+                index=dataframe.columns.get_loc("LUNG_CANCER")  # Default to 'LUNG_CANCER'
+            )
+            feature_columns = st.multiselect(
+                "Select feature columns (X):",
+                [col for col in dataframe.columns if col != target_column],
+                default=[col for col in dataframe.columns if col != "LUNG_CANCER"]  # Default to all except 'LUNG_CANCER'
+            )
+        else:
+            st.error("The dataset does not contain the 'LUNG_CANCER' column. Please upload a valid dataset.")
 
     if target_column and feature_columns:
         X = dataframe[feature_columns].values
