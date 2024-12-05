@@ -167,7 +167,7 @@ if selection == "Train Model":
                 if st.button(f"Save {model_choice} Model"):
                     save_folder = r'C:\Users\user\Desktop\jeah\ITD105\LAB3\Models'
                     os.makedirs(save_folder, exist_ok=True)
-                    model_filename = os.path.join(save_folder, f"{model_choice.replace(' ', '_')}_model.joblib")
+                    model_filename = os.path.join(save_folder, f"regression_{model_choice.replace(' ', '_')}_model.joblib")
                     joblib.dump(model, model_filename)
                     st.success(f"Model saved at: {save_folder}")
     else:
